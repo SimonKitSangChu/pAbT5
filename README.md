@@ -5,6 +5,9 @@ through encoder-decoder protein language model. Derived from [ProtT5_xl_uniref50
 on paired [OAS](https://opig.stats.ox.ac.uk/webapps/oas/) database on machine translation task. Specifically, heavy-to-light and light-to-heavy are
 regarded as forward and backward translations respectively.
 
+## Publication
+[Chu, Simon KS, and Kathy Y. Wei. "Conditional Generation of Paired Antibody Chain Sequences through Encoder-Decoder Language Model." arXiv preprint arXiv:2301.02748 (2023).](https://arxiv.org/abs/2301.02748)
+
 ## Installation
 pAbT5 depends on [ANARCI](https://github.com/oxpig/ANARCI) which requires manually installation from users. User might have to uncomment for
 HMM profile install in ANARCI under `setup.py`. Optionally, user can install [pyrosetta](https://www.pyrosetta.org/) and [DeepAb](https://github.com/RosettaCommons/DeepAb), or [AlphaFold](https://github.com/deepmind/alphafold) for
