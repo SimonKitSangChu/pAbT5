@@ -47,7 +47,7 @@ python show_exp.py --input_csv input.csv --checkpoint_dir model_ckpt --output_di
 ```
 User should pass `--is_t5_decoder`, or `--is_progen2` and `--tokenizer` whenever appropriate. 
 
-#### Note: pAbT5 is has 3B parameters. Users might consider to either inference on GPU with sufficient memory or on half precision.
+#### Note: pAbT5 has 3B parameters. Users might consider to either inference on GPU with sufficient memory and possibly on half precision.
 
 ## Training
 To reproduce the results, `finetune.py` automatically handles dataset generation and finetuning.
