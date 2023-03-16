@@ -28,6 +28,13 @@ def string2hash(string: str, method: Callable = hashlib.md5) -> str:
     return hashname.hexdigest()
 
 
+def read_fasta(fasta: Union[str, Path], return_sequence: bool = False) \
+        -> List[Union[SeqRecord, str]]:
+    if return_sequence:
+        return [str(record.seq) for record in SeqIO.parse(fasta, 'fasta')]
+    return list(SeqIO.parse(fasta, 'fasta'))
+
+
 def write_fasta(fasta: Union[str, Path], records: Union[Dict[str, str], List[SeqRecord]]):
     if type(records) == dict:
         record = next(iter(records))

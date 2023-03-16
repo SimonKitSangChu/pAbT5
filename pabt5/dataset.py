@@ -761,6 +761,7 @@ def get_antibody_info(
         output_regions: bool = False,
         output_region_lengths: bool = False,
         add_cdr_ids: bool = False,
+        ignore_errors: bool = False,
         **kwargs
 ) -> List[Dict[str, Any]]:
     try:
@@ -774,8 +775,11 @@ def get_antibody_info(
             **kwargs
         )
         assert len(numbering) == len(alignment_details) == len(sequences)
-    except:
-        return [_get_default_datum(assign_germline, add_cdr_ids, output_regions, output_region_lengths)] * len(sequences)
+    except Exception as e:
+        if ignore_errors:
+            return [_get_default_datum(assign_germline, add_cdr_ids, output_regions, output_region_lengths)] * len(sequences)
+        else:
+            raise e
 
     data = []
     for i_seq in range(len(sequences)):

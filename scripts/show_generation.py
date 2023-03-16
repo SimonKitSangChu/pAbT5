@@ -1,6 +1,7 @@
 import argparse
 import pandas as pd
 from pathlib import Path
+import warnings
 
 from datasets import load_from_disk
 import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ from tqdm import tqdm
 import plotly.graph_objs as go
 import seaborn as sns
 
-from pabt5.util import spaceout
+from pabt5.util import spaceout, read_fasta
 from pabt5.alignment import blastp_pair, alignment2hsp
 from pabt5.dataset import get_antibody_info, get_region_identities
 
@@ -122,12 +123,17 @@ generate_config = {
     'temperature': 1,
 }
 
+tqdm.pandas()
+
 # cmd options
 cli = argparse.ArgumentParser()
 cli.add_argument('--dataset_dir', type=str, default=None, help='include oas dataset in TSNE if provided')
 cli.add_argument('--checkpoint_dir', type=str, help='path to model checkpoint')
 cli.add_argument('--output_dir', type=str, default='visualization/generation')
 cli.add_argument('--format', type=str, default='png', help='output figure format')
+cli.add_argument('--iglm_fasta_h', type=str)
+cli.add_argument('--iglm_fasta_l', type=str)
+cli.add_argument('--progen2oas_fasta', type=str)
 args = cli.parse_args()
 
 output_dir = Path(args.output_dir)
@@ -212,6 +218,86 @@ else:
     df = pd.DataFrame(data)
     df.to_csv(csv, index=None)
 
+use_progen2oas = args.progen2oas_fasta is not None
+if use_progen2oas:
+    print('Adding ProGen2-oas sequences')
+    sequences_oas = read_fasta(args.progen2oas_fasta, return_sequence=True)
+
+    def _add_progen2oas(row):
+        if row['species_h'] != 'human' or row['species_l'] != 'human':
+            return None
+
+        target_heavy = row['pair_order'] == 'l2h'
+        if target_heavy:
+            sequence = sequences_oas.pop()
+        else:
+            sequence = sequences_oas.pop()
+
+        info = get_antibody_info([('tmp', sequence)], assign_germline=True)[0]
+
+        match_hl = target_heavy == info['is_heavy']
+        match_chain_type = info['chain_type'] == (row['chain_type_h'] if target_heavy else row['chain_type_l'])
+        match_v_gene = info['v_gene'] == (row['v_gene_h'] if target_heavy else row['v_gene_l'])
+        match_j_gene = info['j_gene'] == (row['j_gene_h'] if target_heavy else row['j_gene_l'])
+        return pd.Series([sequence, match_hl, match_chain_type, match_v_gene, match_j_gene])
+
+    # TODO cache
+    df[['sequence_progen2oas', 'match_hl_progen2oas', 'match_chain_type_progen2oas', 'match_j_gene_progen2oas',
+        'match_v_gene_progen2oas']] = df.progress_apply(_add_progen2oas, axis='columns')
+else:
+    warnings.warn('ProGen2-oas sequences are not added.')
+    df['sequence_progen2oas'] = None
+    df['match_hl_progen2oas'] = None
+    df['match_chain_type_progen2oas'] = None
+    df['match_v_gene_progen2oas'] = None
+    df['match_j_gene_progen2oas'] = None
+
+
+use_iglm = args.iglm_fasta_h is not None and args.iglm_fasta_l is not None
+if use_iglm:
+    print('Adding IGLM sequences')
+    csv_iglm = output_dir / 'iglm.csv'
+    if csv_iglm.exists():
+        print('Loading from cache')
+        df_iglm = pd.read_csv(csv_iglm)
+    else:
+        sequences_h_igml = read_fasta(args.iglm_fasta_h, return_sequence=True)
+        sequences_l_igml = read_fasta(args.iglm_fasta_l, return_sequence=True)
+
+        def _add_iglm(row):
+            if row['species_h'] != 'human' or row['species_l'] != 'human':
+                return None
+
+            target_heavy = row['pair_order'] == 'l2h'
+            if target_heavy:
+                sequence = sequences_h_igml.pop()
+            else:
+                sequence = sequences_l_igml.pop()
+
+            info = get_antibody_info([('tmp', sequence)], assign_germline=True)[0]
+
+            match_hl = target_heavy == info['is_heavy']
+            match_chain_type = info['chain_type'] == (row['chain_type_h'] if target_heavy else row['chain_type_l'])
+            match_v_gene = info['v_gene'] == (row['v_gene_h'] if target_heavy else row['v_gene_l'])
+            match_j_gene = info['j_gene'] == (row['j_gene_h'] if target_heavy else row['j_gene_l'])
+            return pd.Series([sequence, match_hl, match_chain_type, match_v_gene, match_j_gene])
+
+
+        df_iglm = df.progress_apply(_add_iglm, axis='columns')
+        df_iglm.to_csv(csv_iglm, index=None)
+
+    df[['sequence_iglm', 'match_hl_iglm', 'match_chain_type_iglm', 'match_j_gene_iglm', 'match_v_gene_iglm']] = \
+        df_iglm
+
+else:
+    warnings.warn('IGLM sequences are not added.')
+    df['sequence_iglm'] = None
+    df['match_hl_iglm'] = None
+    df['match_chain_type_iglm'] = None
+    df['match_v_gene_iglm'] = None
+    df['match_j_gene_iglm'] = None
+
+
 # by category evaluation
 df['pair'] = df['sequence_h'] + '_' + df['sequence_l']
 cols_family = ['v_gene_h', 'j_gene_h', 'v_gene_l', 'j_gene_l', 'v_gene_g', 'j_gene_g']
@@ -257,148 +343,203 @@ plt.tight_layout()
 ax.figure.savefig(output_dir / 'species_heatmap.png', dpi=300)
 plt.close()
 
-# human specific evaluation
-df_human = df[(df['species_h'] == 'human') & (df['species_l'] == 'human')]
-df_ = df_human.copy()
 
-df_h2l = df_human[df_human['pair_order'] == 'h2l']
-df_l2h = df_human[df_human['pair_order'] == 'l2h']
+# human specific evaluation on recovery
+def df2sunburst_df(df, suffix=''):
+    df_h2l = df[df['pair_order'] == 'h2l']
+    df_l2h = df[df['pair_order'] == 'l2h']
 
-data = [
-    (
-        'antibody',
-        '',
-        '',
-        len(df_h2l) + len(df_l2h),  # generated match
-        len(df_h2l) + len(df_l2h),  # generated count
-        (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],  # observed count
-        (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],  # parent count
-    ),
-    (
-        'heavy',
-        'heavy',
-        'antibody',
-        df_l2h['match_hl'].sum(),
-        len(df_l2h),
-        len(df_l2h) // generate_config['num_return_sequences'],
-        (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],
-    ),
-    (
-        'light',
-        'light',
-        'antibody',
-        df_h2l['match_hl'].sum(),
-        len(df_h2l),
-        len(df_h2l) // generate_config['num_return_sequences'],
-        (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],
-    ),
-    (
-        'H',
-        'H',
-        'heavy',
-        df_l2h['match_hl'].sum(),
-        len(df_l2h),
-        len(df_l2h) // generate_config['num_return_sequences'],
-        (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],
-    ),
-]
+    data = [
+        (
+            'antibody',
+            '',
+            '',
+            len(df_h2l) + len(df_l2h),  # generated match
+            len(df_h2l) + len(df_l2h),  # generated count
+            (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],  # observed count
+            (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],  # parent count
+        ),
+        (
+            'heavy',
+            'heavy',
+            'antibody',
+            df_l2h['match_hl' + suffix].sum(),
+            len(df_l2h),
+            len(df_l2h) // generate_config['num_return_sequences'],
+            (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],
+        ),
+        (
+            'light',
+            'light',
+            'antibody',
+            df_h2l['match_hl' + suffix].sum(),
+            len(df_h2l),
+            len(df_h2l) // generate_config['num_return_sequences'],
+            (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],
+        ),
+        (
+            'H',
+            'H',
+            'heavy',
+            df_l2h['match_hl' + suffix].sum(),
+            len(df_l2h),
+            len(df_l2h) // generate_config['num_return_sequences'],
+            (len(df_h2l) + len(df_l2h)) // generate_config['num_return_sequences'],
+        ),
+    ]
 
-greek_letter_map = {
-    'L': 'λ',
-    'K': 'κ',
-}
+    greek_letter_map = {
+        'L': 'λ',
+        'K': 'κ',
+    }
 
-for chain_type, df_chain_type in df_h2l.groupby('chain_type_l'):
-    data.append((
-        greek_letter_map.get(chain_type, chain_type),
-        greek_letter_map.get(chain_type, chain_type),
-        'light',
-        int(df_chain_type['match_chain_type'].sum()),
-        len(df_chain_type),
-        len(df_chain_type) // generate_config['num_return_sequences'],
-        len(df_h2l) // generate_config['num_return_sequences'],
-    ))
+    for chain_type, df_chain_type in df_h2l.groupby('chain_type_l'):
+        data.append((
+            greek_letter_map.get(chain_type, chain_type),
+            greek_letter_map.get(chain_type, chain_type),
+            'light',
+            int(df_chain_type['match_chain_type' + suffix].sum()),
+            len(df_chain_type),
+            len(df_chain_type) // generate_config['num_return_sequences'],
+            len(df_h2l) // generate_config['num_return_sequences'],
+        ))
 
-    for family1, df_family1 in df_chain_type.groupby('v_gene_l'):
+        for family1, df_family1 in df_chain_type.groupby('v_gene_l'):
+            data.append((
+                family1,
+                family1,
+                greek_letter_map.get(chain_type, chain_type),
+                int(df_family1['match_v_gene' + suffix].sum()),
+                len(df_family1),
+                len(df_family1) // generate_config['num_return_sequences'],
+                len(df_chain_type) // generate_config['num_return_sequences'],
+            ))
+
+            for family2, df_family2 in df_family1.groupby('j_gene_l'):
+                data.append((
+                    family1 + ' - ' + family2,
+                    family2,
+                    family1,
+                    int((df_family2['match_v_gene' + suffix] & df_family2['match_j_gene' + suffix]).sum()),
+                    len(df_family2),
+                    len(df_family2) // generate_config['num_return_sequences'],
+                    len(df_family1) // generate_config['num_return_sequences'],
+                ))
+
+    for family1, df_family1 in df_l2h.groupby('v_gene_h'):
         data.append((
             family1,
             family1,
-            greek_letter_map.get(chain_type, chain_type),
-            int(df_family1['match_v_gene'].sum()),
+            'H',
+            int(df_family1['match_v_gene' + suffix].sum()),
             len(df_family1),
             len(df_family1) // generate_config['num_return_sequences'],
-            len(df_chain_type) // generate_config['num_return_sequences'],
+            len(df_l2h) // generate_config['num_return_sequences'],
         ))
 
-        for family2, df_family2 in df_family1.groupby('j_gene_l'):
+        for family2, df_family2 in df_family1.groupby('j_gene_h'):
             data.append((
                 family1 + ' - ' + family2,
                 family2,
                 family1,
-                int((df_family2['match_v_gene'] & df_family2['match_j_gene']).sum()),
+                int((df_family2['match_v_gene' + suffix] & df_family2['match_j_gene' + suffix]).sum()),
                 len(df_family2),
                 len(df_family2) // generate_config['num_return_sequences'],
                 len(df_family1) // generate_config['num_return_sequences'],
             ))
 
-for family1, df_family1 in df_l2h.groupby('v_gene_h'):
-    data.append((
-        family1,
-        family1,
-        'H',
-        int(df_family1['match_v_gene'].sum()),
-        len(df_family1),
-        len(df_family1) // generate_config['num_return_sequences'],
-        len(df_l2h) // generate_config['num_return_sequences'],
-    ))
+    data = pd.DataFrame(
+        data,
+        columns=['ids', 'labels', 'parents', 'generated_match', 'generated_count', 'observed_count', 'parent_count']
+    )
+    data['accuracy'] = data['generated_match'] / data['generated_count']
+    return data
 
-    for family2, df_family2 in df_family1.groupby('j_gene_h'):
-        data.append((
-            family1 + ' - ' + family2,
-            family2,
-            family1,
-            int((df_family2['match_v_gene'] & df_family2['match_j_gene']).sum()),
-            len(df_family2),
-            len(df_family2) // generate_config['num_return_sequences'],
-            len(df_family1) // generate_config['num_return_sequences'],
-        ))
 
-data = pd.DataFrame(
-    data,
-    columns=['ids', 'labels', 'parents', 'generated_match', 'generated_count', 'observed_count', 'parent_count']
-)
-data['accuracy'] = data['generated_match'] / data['generated_count']
+def make_sunburst(df, png):
+    fig = go.Figure(
+        data=go.Sunburst(
+            ids=df['ids'],
+            labels=df['labels'],
+            parents=df['parents'],
+            values=df['observed_count'],
+            branchvalues='total',
+            insidetextfont={'size': 18},
+            opacity=1,
+        ),
+    )
+    marker = fig.data[0].marker
+    marker.colors = [0] + df['accuracy'][1:].to_list()  # set root to white
+    marker.colorscale = 'Blues'
+    marker.cmin = 0
+    marker.cmax = 1
+    marker.showscale = True
+
+    marker.colorbar.title = 'Recovery rate'
+    marker.colorbar.titlefont = dict(size=18)
+    marker.colorbar.title.side = 'right'
+    # marker.colorbar.tickvals = [0, 0.5, 1]
+    # marker.colorbar.ticktext = [0, 0.5, 1]
+    marker.colorbar.tickfont = dict(size=16)
+
+    fig.update_layout(
+        margin=dict(t=0, l=0, r=0, b=0),
+    )
+
+    # fig.show()
+    dpi = 300
+    fig.write_image(png, width=3.5 * dpi, height=3 * dpi, scale=10)
+
+
+df_human = df[(df['species_h'] == 'human') & (df['species_l'] == 'human')]
+
+data = df2sunburst_df(df_human, suffix='')
+data['accuracy_population'] = data['observed_count'] / data.iloc[0]['observed_count']
+
+if use_progen2oas:
+    data_progen2oas = df2sunburst_df(df_human, suffix='_progen2oas')
+    data['accuracy_progen2oas'] = data_progen2oas['accuracy']
+
+if use_iglm:
+    data_iglm = df2sunburst_df(df_human, suffix='_iglm')
+    data['accuracy_iglm'] = data_iglm['accuracy']
+
+
 data.to_csv(output_dir / 'human_evaluation.csv', index=False)
 
-fig = go.Figure(
-    data=go.Sunburst(
-        ids=data['ids'],
-        labels=data['labels'],
-        parents=data['parents'],
-        values=data['observed_count'],
-        branchvalues='total',
-        insidetextfont={'size': 18},
-        opacity=1,
-    ),
-)
-marker = fig.data[0].marker
-marker.colors = [0] + data['accuracy'][1:].to_list()  # set root to white
-marker.colorscale = 'Blues'
-marker.cmin = 0
-marker.cmax = 1
-marker.showscale = True
+# plotting
+# 1. sunburst
+make_sunburst(data, output_dir / 'sunbursts.png')
 
-marker.colorbar.title = 'Recovery rate'
-marker.colorbar.titlefont = dict(size=18)
-marker.colorbar.title.side = 'right'
-# marker.colorbar.tickvals = [0, 0.5, 1]
-# marker.colorbar.ticktext = [0, 0.5, 1]
-marker.colorbar.tickfont = dict(size=16)
+# 2. scatter
+s_max = 300
+data['s'] = data['observed_count'] / data['observed_count'].max() * s_max
 
-fig.update_layout(
-    margin=dict(t=0, l=0, r=0, b=0),
-)
+fig, ax = plt.subplots(dpi=300, tight_layout=True)
+data.plot.scatter('accuracy', 'accuracy_population',
+                  s=data['s'], ax=ax, label='population', c=colors[0])
 
-# fig.show()
-dpi = 300
-fig.write_image(output_dir / 'sunbursts.png', width=3.5 * dpi, height=3 * dpi, scale=10)
+if use_progen2oas:
+    data.plot.scatter('accuracy', 'accuracy_progen2oas',
+                      s=data['s'], ax=ax, label='ProGen2-oas', c=colors[1])
+else:
+    data.plot.scatter('accuracy', 'accuracy_iglm',
+                      s=data['s'], ax=ax, label='IgLM', c=colors[3])
+    k = 'match_j_gene'
+
+ax.set_xlim(0, 1)
+ax.set_ylim(ax.get_xlim())
+ax.set_aspect('equal', 'box')
+ax.set_xlabel('Recovery rate (pAbT5)')
+ax.set_ylabel('Recovery rate (baseline)')
+ax.legend()
+
+ax.plot(ax.get_xlim(), ax.get_xlim(), color='black', linestyle='--', alpha=0.5)
+
+fig.savefig(output_dir / 'scatter_recovery_human.png')
+plt.close()
+
+# 3. verbose output for table
+keys = ['match_hl', 'match_chain_type', 'match_v_gene', 'match_j_gene']
+for k in keys:
+    print(k, df_human[k].sum(), df_human[f'{k}_progen2oas'].sum(), df_human[f'{k}_iglm'].sum())
