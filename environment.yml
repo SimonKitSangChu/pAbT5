@@ -1,0 +1,33 @@
+channels:
+  - conda-forge
+  - anaconda
+  - bioconda
+  - plotly
+dependencies:
+  - conda-forge::python==3.9.*
+  - conda-forge::pip
+  - conda-forge::matplotlib
+  - conda-forge::tqdm
+  - anaconda::biopython
+  - anaconda::pandas
+  - anaconda::scikit-learn
+  - anaconda::scipy
+  - anaconda::seaborn
+  - bioconda::blast
+  - bioconda::clustalw
+  - bioconda::hmmer
+  - bioconda::logomaker
+  - bioconda::mmseqs2
+  - plotly::plotly
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu116
+      - accelerate
+      - datasets
+      - deepspeed
+      - gdown
+      - ray[default]
+      - torch
+      - transformers
+      - sentencepiece
+      - ipython  # optional
+
