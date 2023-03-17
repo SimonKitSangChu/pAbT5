@@ -277,22 +277,28 @@ class SequenceSimilarityNetwork(dict):
             max_queue_size = torch.get_num_threads() / num_cpus
 
         result_refs = []
+        ready_refs = []
+
         for seq1, seq2 in pbar:
             pair = (seq1, seq2)
+
             if len(result_refs) >= max_queue_size:
-                ready_refs, result_refs = ray.wait(result_refs)
-                ray.get(ready_refs)
+                ready_refs_, result_refs = ray.wait(result_refs)
+                ready_refs.extend(ready_refs_)
+                ray.get(result_refs)
+
             result_refs.append(fxn.remote(*pair))
-            ray.get(result_refs)
+
+        ready_refs.extend(result_refs)
 
         network = cls()
-        for result_ref in result_refs:
-            (seq1, seq2), identity = ray.get(result_ref)
+        for i, ready_ref in enumerate(ready_refs):
+            (seq1, seq2), identity = ray.get(ready_ref)
+
             if seq1 not in network:
                 network[seq1] = {}
             if seq2 not in network:
                 network[seq2] = {}
-
             network[seq1][seq2] = network[seq2][seq1] = identity
 
         return network
