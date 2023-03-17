@@ -553,6 +553,7 @@ def decode2string(tokenizer, outputs, skip_special_tokens: bool = False, squeeze
 
 def desymmetrize_dataset(
         dataset: Union[DatasetDict, Dataset],
+        **kwargs,
 ):
     def is_ordered(row: Dict[str, Any]) -> bool:
         bool_ = is_heavyA(row['sequenceA'], row['sequenceB'])
@@ -560,7 +561,8 @@ def desymmetrize_dataset(
 
     return dataset.filter(
         function=is_ordered,
-        desc='desymmetrize dataset'
+        desc='desymmetrize dataset',
+        **kwargs,
     )
 
 

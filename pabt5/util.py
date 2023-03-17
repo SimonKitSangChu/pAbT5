@@ -85,18 +85,8 @@ def sequences2records(sequences: Union[List[str], Dict[str, str]]) -> List[SeqRe
 def write_fasta_from_sequences(
     sequences: Dict[str, str],
     fasta: Union[Path, str],
-    descriptions: Optional[Dict[str, str]] = None
-    ):
-    records = []
-    for k, sequence in sequences.items():
-        record = SeqRecord(
-                Seq(sequence),
-                id=k,
-                name=string2hash(sequence),
-                description='' if descriptions is None else descriptions[k],
-            )
-        records.append(record)
-
+):
+    records = sequences2records(sequences)
     SeqIO.write(records, fasta, 'fasta')
 
 

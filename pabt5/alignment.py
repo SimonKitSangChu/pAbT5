@@ -287,10 +287,18 @@ class SequenceSimilarityNetwork(dict):
 
         network = cls()
         for result_ref in result_refs:
-            pair, identity = ray.get(result_ref)
-            network[pair] = network[reversed(pair)] = identity
+            (seq1, seq2), identity = ray.get(result_ref)
+            if seq1 not in network:
+                network[seq1] = {}
+            if seq2 not in network:
+                network[seq2] = {}
+
+            network[seq1][seq2] = network[seq2][seq1] = identity
 
         return network
+
+    def get_closest(self, sequence: str) -> str:
+        return max(self[sequence], key=self[sequence].get)
 
 
 class EdgeSimilarityNetwork(dict):
