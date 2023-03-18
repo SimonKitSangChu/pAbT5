@@ -258,7 +258,7 @@ class SequenceSimilarityNetwork(dict):
     @classmethod
     def from_sequences(cls, sequences1: Iterable[str], sequences2: Optional[Iterable[str]],
                        disable_tqdm: bool = False, max_queue_size: Optional[int] = None,
-                       num_cpus: float = 1, clean: bool = False) -> 'SequenceSimilarityNetwork':
+                       num_cpus: float = 1, clean: bool = False, num_returns: int = 1) -> 'SequenceSimilarityNetwork':
         sequences1 = set(sequences1)
         sequences2 = set(sequences2) if sequences2 else sequences1
 
@@ -283,13 +283,12 @@ class SequenceSimilarityNetwork(dict):
             pair = (seq1, seq2)
 
             if len(result_refs) >= max_queue_size:
-                ready_refs_, result_refs = ray.wait(result_refs)
+                ready_refs_, result_refs = ray.wait(result_refs, num_returns=num_returns)
                 ready_refs.extend(ready_refs_)
                 ray.get(result_refs)
 
             result_refs.append(fxn.remote(*pair))
 
-        ready_refs.extend(result_refs)
 
         network = cls()
         for i, ready_ref in enumerate(ready_refs):
