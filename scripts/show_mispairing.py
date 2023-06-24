@@ -6,6 +6,7 @@ from datasets import load_from_disk
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from scipy.stats import ranksums
 from transformers import T5Tokenizer, AutoModelForSeq2SeqLM
 import torch
 from tqdm import tqdm
@@ -83,12 +84,18 @@ def get_metrics(df, col_true='hetero', n_resample=100):
 
     accuracies = np.array(acccuracies)
     aurocs = np.array(aurocs)
+    statistic, pvalue = ranksums(
+        X_test[y_test, 0], X_test[~y_test, 0],
+        nan_policy='omit',
+    )
 
     return {
         'accuracy': np.mean(accuracies),
         'auroc': np.mean(aurocs),
         'accuracy_std': np.std(accuracies),
         'auroc_std': np.std(aurocs),
+        'ranksums': statistic,
+        'ranksums_pvalue': pvalue,
     }
 
 
