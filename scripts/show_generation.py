@@ -11,8 +11,8 @@ from tqdm import tqdm
 import plotly.graph_objs as go
 import seaborn as sns
 
-from pabt5.util import spaceout, read_fasta
-from pabt5.alignment import blastp_pair, alignment2hsp
+from pabt5.util import spaceout, read_fasta, read_json, squeeze, read_pkl
+from pabt5.alignment import blastp_pair, alignment2hsp, SequenceSimilarityNetwork
 from pabt5.dataset import get_antibody_info, get_region_identities
 
 
@@ -221,29 +221,36 @@ else:
 use_progen2oas = args.progen2oas_fasta is not None
 if use_progen2oas:
     print('Adding ProGen2-oas sequences')
-    sequences_oas = read_fasta(args.progen2oas_fasta, return_sequence=True)
+    csv_progen2oas = output_dir / 'generation_progen2oas.csv'
+    if csv_progen2oas.exists():
+        df_progen2oas = pd.read_csv(csv_progen2oas)
+    else:
+        sequences_oas = read_fasta(args.progen2oas_fasta, return_sequence=True)
 
-    def _add_progen2oas(row):
-        if row['species_h'] != 'human' or row['species_l'] != 'human':
-            return None
+        def _add_progen2oas(row):
+            if row['species_h'] != 'human' or row['species_l'] != 'human':
+                return None
 
-        target_heavy = row['pair_order'] == 'l2h'
-        if target_heavy:
-            sequence = sequences_oas.pop()
-        else:
-            sequence = sequences_oas.pop()
+            target_heavy = row['pair_order'] == 'l2h'
+            if target_heavy:
+                sequence = sequences_oas.pop()
+            else:
+                sequence = sequences_oas.pop()
 
-        info = get_antibody_info([('tmp', sequence)], assign_germline=True)[0]
+            info = get_antibody_info([('tmp', sequence)], assign_germline=True)[0]
 
-        match_hl = target_heavy == info['is_heavy']
-        match_chain_type = info['chain_type'] == (row['chain_type_h'] if target_heavy else row['chain_type_l'])
-        match_v_gene = info['v_gene'] == (row['v_gene_h'] if target_heavy else row['v_gene_l'])
-        match_j_gene = info['j_gene'] == (row['j_gene_h'] if target_heavy else row['j_gene_l'])
-        return pd.Series([sequence, match_hl, match_chain_type, match_v_gene, match_j_gene])
+            match_hl = target_heavy == info['is_heavy']
+            match_chain_type = info['chain_type'] == (row['chain_type_h'] if target_heavy else row['chain_type_l'])
+            match_v_gene = info['v_gene'] == (row['v_gene_h'] if target_heavy else row['v_gene_l'])
+            match_j_gene = info['j_gene'] == (row['j_gene_h'] if target_heavy else row['j_gene_l'])
+            return pd.Series([sequence, match_hl, match_chain_type, match_v_gene, match_j_gene])
 
-    # TODO cache
+        df_progen2oas = df.progress_apply(_add_progen2oas, axis='columns')
+        df_progen2oas.to_csv(csv_progen2oas, index=None)
+
     df[['sequence_progen2oas', 'match_hl_progen2oas', 'match_chain_type_progen2oas', 'match_j_gene_progen2oas',
-        'match_v_gene_progen2oas']] = df.progress_apply(_add_progen2oas, axis='columns')
+        'match_v_gene_progen2oas']] = df_progen2oas
+
 else:
     warnings.warn('ProGen2-oas sequences are not added.')
     df['sequence_progen2oas'] = None
@@ -296,6 +303,54 @@ else:
     df['match_chain_type_iglm'] = None
     df['match_v_gene_iglm'] = None
     df['match_j_gene_iglm'] = None
+
+use_closest = True
+if use_closest:
+    print('Adding closest sequences')
+    csv_network = output_dir / 'closest.csv'
+    if csv_network.exists():
+        print('Loading from cache')
+        df_closest = pd.read_csv(csv_network)
+    else:
+        network = read_pkl('scripts/sequence_similarity_network.pkl')
+
+        dataset_val = load_from_disk('dataset_sym')['val']
+        dataset_test = load_from_disk('dataset_sym')['test']
+        edges = {}
+        for row in dataset_val:
+            edges[squeeze(row['sequenceA'])] = squeeze(row['sequenceB'])
+            edges[squeeze(row['sequenceB'])] = squeeze(row['sequenceA'])
+
+        def _add_network(row):
+            if row['species_h'] != 'human' or row['species_l'] != 'human':
+                return None
+
+            target_heavy = row['pair_order'] == 'l2h'
+            if target_heavy:
+                assert row['sequence_l'] in network, row['sequence_l']
+                sequence = edges[
+                    network.get_closest(row['sequence_l'])
+                ]
+            else:
+                assert row['sequence_h'] in network, row['sequence_h']
+                sequence = edges[
+                    network.get_closest(row['sequence_h'])
+                ]
+
+            info = get_antibody_info([('tmp', sequence)], assign_germline=True)[0]
+
+            match_hl = target_heavy == info['is_heavy']
+            match_chain_type = info['chain_type'] == (row['chain_type_h'] if target_heavy else row['chain_type_l'])
+            match_v_gene = info['v_gene'] == (row['v_gene_h'] if target_heavy else row['v_gene_l'])
+            match_j_gene = info['j_gene'] == (row['j_gene_h'] if target_heavy else row['j_gene_l'])
+            return pd.Series([sequence, match_hl, match_chain_type, match_v_gene, match_j_gene])
+
+
+        df_closest = df.progress_apply(_add_network, axis='columns')
+        df_closest.to_csv(csv_network, index=None)
+
+    df[['sequence_closest', 'match_hl_closest', 'match_chain_type_closest', 'match_j_gene_closest',
+        'match_v_gene_closest']] = df_closest
 
 
 # by category evaluation
@@ -504,6 +559,10 @@ if use_iglm:
     data_iglm = df2sunburst_df(df_human, suffix='_iglm')
     data['accuracy_iglm'] = data_iglm['accuracy']
 
+if use_closest:
+    data_network = df2sunburst_df(df_human, suffix='_closest')
+    data['accuracy_closest'] = data_network['accuracy']
+
 
 data.to_csv(output_dir / 'human_evaluation.csv', index=False)
 
@@ -517,21 +576,25 @@ data['s'] = data['observed_count'] / data['observed_count'].max() * s_max
 
 fig, ax = plt.subplots(dpi=300, tight_layout=True)
 data.plot.scatter('accuracy', 'accuracy_population',
-                  s=data['s'], ax=ax, label='population', c=colors[0])
+                  s=data['s'], ax=ax, label='Population samping', c=colors[0])
+
+if use_closest:
+    data.plot.scatter('accuracy', 'accuracy_closest',
+                      s=data['s'], ax=ax, label='Closest sequence', c=colors[4])
 
 if use_progen2oas:
     data.plot.scatter('accuracy', 'accuracy_progen2oas',
-                      s=data['s'], ax=ax, label='ProGen2-oas', c=colors[1])
-else:
+                      s=data['s'], ax=ax, label='ProGen2-OAS', c=colors[1])
+if use_progen2oas:
     data.plot.scatter('accuracy', 'accuracy_iglm',
                       s=data['s'], ax=ax, label='IgLM', c=colors[3])
-    k = 'match_j_gene'
+
 
 ax.set_xlim(0, 1)
 ax.set_ylim(ax.get_xlim())
 ax.set_aspect('equal', 'box')
 ax.set_xlabel('Recovery rate (pAbT5)')
-ax.set_ylabel('Recovery rate (baseline)')
+ax.set_ylabel('Recovery rate (baseline/state-of-the-art)')
 ax.legend()
 
 ax.plot(ax.get_xlim(), ax.get_xlim(), color='black', linestyle='--', alpha=0.5)
@@ -542,4 +605,4 @@ plt.close()
 # 3. verbose output for table
 keys = ['match_hl', 'match_chain_type', 'match_v_gene', 'match_j_gene']
 for k in keys:
-    print(k, df_human[k].sum(), df_human[f'{k}_progen2oas'].sum(), df_human[f'{k}_iglm'].sum())
+    print(k, df_human[k].sum(), df_human[f'{k}_closest'].sum(), df_human[f'{k}_progen2oas'].sum(), df_human[f'{k}_iglm'].sum())

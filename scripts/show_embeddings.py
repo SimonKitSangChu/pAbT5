@@ -446,3 +446,6 @@ for col1, col2 in itertools.combinations(cols_h + cols_l, 2):  # pairwise recomb
     plt.tight_layout()
     plt.savefig(output_dir / f'{col1}_{col2}.png', dpi=300)
     plt.close()
+
+    df_ = freq_org_.loc[freq_org.index, freq_org.columns]
+    df_.to_csv(output_dir / f'{col1}_{col2}.csv')

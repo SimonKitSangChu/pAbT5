@@ -138,8 +138,7 @@ else:
         species = set(df['species_h'].tolist())
 
         for _, row in tqdm(df.iterrows(), total=len(df), desc=split):
-            df_spec = df[df['species_h'] != row['species_h']]  # random cross-species partner
-            row_spec = df_spec.sample(frac=1).iloc[0]
+            row_spec = df[df['species_h'] != row['species_h']].sample(frac=1).iloc[0]  # random cross-species partner
             vh_tokens_cs, vl_tokens_cs = tokenize_pair(
                 row_spec['sequence_vh'], row_spec['sequence_vl'], device)
 
@@ -152,8 +151,7 @@ else:
                 vh_tokens_he, vl_tokens_he = tokenize_pair(
                     row_chain['sequence_vh'], row_chain['sequence_vl'], device)
 
-                df_spec = df[df['species_h'] == row['species_h']]  # random in-species partner
-                row_spec = df_spec.sample(frac=1).iloc[0]
+                row_spec = df[df['species_h'] == row['species_h']].sample(frac=1).iloc[0]  # random in-species partner
                 vh_tokens_is, vl_tokens_is = tokenize_pair(
                     row_spec['sequence_vh'], row_spec['sequence_vl'], device)
             else:
@@ -175,6 +173,8 @@ else:
                 'homo-H': get_perplexity(model, vh_tokens_ho, vh_tokens),
                 'hetero-L': get_perplexity(model, vh_tokens_he, vl_tokens),
                 'hetero-H': get_perplexity(model, vl_tokens_he, vh_tokens),
+                'original-L': get_perplexity(model, vh_tokens, vl_tokens),
+                'original-H': get_perplexity(model, vl_tokens, vh_tokens),
             }
             df_eval.append(perplexity)
 
@@ -306,6 +306,38 @@ plt.close()
 df_metrics.append({
     'mispairing type': 'species',
     **get_metrics(df, col_true='in'),
+})
+
+# original v.s. shuffled "correct" pairing
+df = df_eval.copy()
+df['original'] = (df['hetero-L'] + df['hetero-H']) / 2
+df['shuffled'] = (df['in-L'] + df['in-H']) / 2
+
+df = df.melt(value_vars=['original', 'shuffled'], var_name='pairing', value_name='perplexity', id_vars='split')
+df['pairing type'] = df['pairing'].apply(lambda x: 'original' if 'original' in x else 'shuffled')
+df = df.dropna()
+
+ax = sns.violinplot(
+    data=df,
+    x='pairing type',
+    y='perplexity',
+    scale_hue=False,
+    inner='quartile',
+    cut=True,
+)
+ax.set_ylim(1, None)
+ax.set_xlabel(None)
+ax.set_ylabel('perplexity', fontsize=16)
+handles, labels = ax.get_legend_handles_labels()
+ax.legend(handles=handles, labels=labels, fontsize=16)
+
+plt.tight_layout(pad=0.3)
+plt.savefig(output_dir / f'original_shuffled.{args.format}', dpi=300)
+plt.close()
+
+df_metrics.append({
+    'mispairing type': 'original-shuffled',
+    **get_metrics(df, col_true='original'),
 })
 df_metrics = pd.DataFrame(df_metrics)
 df_metrics.to_csv(output_dir / 'shuffled.csv', index=None)
