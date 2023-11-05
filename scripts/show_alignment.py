@@ -112,7 +112,7 @@ for js in tqdm(js_list, desc='analysis: sequence alignment'):
     #  independent of decoder_start_ids and generate_method
     figname = output_dir / f'fig2_{hash_}.{args.format}'
     if args.dump_logits:
-        if figname.exists and not args.overwrite:
+        if figname.exists() and not args.overwrite:
             continue
 
         df_pssm = psiblast_pssm(record_label, db=blastdb)

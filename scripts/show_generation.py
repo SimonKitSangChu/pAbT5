@@ -131,6 +131,8 @@ cli.add_argument('--dataset_dir', type=str, default=None, help='include oas data
 cli.add_argument('--checkpoint_dir', type=str, help='path to model checkpoint')
 cli.add_argument('--output_dir', type=str, default='visualization/generation')
 cli.add_argument('--format', type=str, default='png', help='output figure format')
+cli.add_argument('--model_type', type=str, default='t5', choices=['t5', 't5-decoder'])
+cli.add_argument('--use_closest', type=bool, default=False)
 cli.add_argument('--iglm_fasta_h', type=str)
 cli.add_argument('--iglm_fasta_l', type=str)
 cli.add_argument('--progen2oas_fasta', type=str)
@@ -185,7 +187,17 @@ else:
             input_ids = torch.tensor(input_ids, device=device).view(1, -1)
             labels = torch.tensor(labels, device=device).view(1, -1)
 
-            generate_outputs = model.generate(input_ids=input_ids, **generate_config)
+            if args.model_type == 't5':
+                generate_outputs = model.generate(input_ids=input_ids, **generate_config)
+            elif args.model_type == 't5-decoder':
+                generate_outputs = model.generate(
+                        bos_token_id=model.config.decoder_start_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
+                        **generate_config,
+                )
+            else:
+                raise ValueError(f'{args.model_type} not recognized.')
+
             sequences = [tokenizer.decode(sequence_ids, skip_special_tokens=True).replace(' ', '')
                 for sequence_ids in generate_outputs.sequences]
 
@@ -194,7 +206,10 @@ else:
                 info_vg = get_antibody_info([('tmp', sequence)], assign_germline=True, output_regions=True)[0]
                
                 sequence_target = sequence_h.replace(' ', '') if pair_order == 'l2h' else sequence_l.replace(' ', '')
-                identities = get_region_identities(info_vg, info_vh if pair_order == 'l2h' else info_vl)
+                try:
+                    identities = get_region_identities(info_vg, info_vh if pair_order == 'l2h' else info_vl)
+                except TypeError:  # in the case where the generated sequence is not align-able
+                    identities = {}
                 # identity = get_pairwise_identity(  # replaced by region identities
                 #     sequence,
                 #     sequence_target,
@@ -304,7 +319,7 @@ else:
     df['match_v_gene_iglm'] = None
     df['match_j_gene_iglm'] = None
 
-use_closest = True
+use_closest = args.use_closest
 if use_closest:
     print('Adding closest sequences')
     csv_network = output_dir / 'closest.csv'
@@ -357,7 +372,7 @@ if use_closest:
 df['pair'] = df['sequence_h'] + '_' + df['sequence_l']
 cols_family = ['v_gene_h', 'j_gene_h', 'v_gene_l', 'j_gene_l', 'v_gene_g', 'j_gene_g']
 for col in cols_family:
-    df[col] = df[col].apply(lambda x: x.split('-')[0].split('*')[0])
+    df[col] = df[col].apply(lambda x: x.split('-')[0].split('*')[0] if x is not None else None)
 
 df['match_hl'] = df.apply(_match_h, axis='columns')
 df['match_chain_type'] = df.apply(_match_chain_type, axis='columns')
@@ -606,3 +621,4 @@ plt.close()
 keys = ['match_hl', 'match_chain_type', 'match_v_gene', 'match_j_gene']
 for k in keys:
     print(k, df_human[k].sum(), df_human[f'{k}_closest'].sum(), df_human[f'{k}_progen2oas'].sum(), df_human[f'{k}_iglm'].sum())
+
