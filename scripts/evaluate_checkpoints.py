@@ -23,12 +23,12 @@ cli.add_argument('--checkpoint_dirs', nargs='*', type=str, default=[])
 cli.add_argument('--output_dir', type=str, default='evaluate')
 cli.add_argument('--dataset_dir', type=str, default='data/dataset')
 cli.add_argument('--dataset_split', type=str, default='test')
-cli.add_argument('--debug', action='store_false')
+cli.add_argument('--debug', action='store_false', default=False)
 cli.add_argument('--use_deepspeed', action='store_true', help='(experimental) use deepspeed for training')
 cli.add_argument('--n_samples', type=int)
 cli.add_argument('--max_length', type=int, default=1024)
-cli.add_argument('--no_cuda', action='store_false')
-cli.add_argument('--use_t5_small', ction='store_true',
+cli.add_argument('--no_cuda', action='store_true', default=False)
+cli.add_argument('--use_t5_small', action='store_true',
                  help='train t5-small from scratch for testing; overrides model_type')
 cli.add_argument('--model_name', type=str, default='Rostlab/prot_t5_xl_uniref50')
 cli.add_argument('--model_type', type=str, default='t5', choices=['t5', 't5-decoder'])
@@ -94,6 +94,8 @@ for checkpoint_dir in args.checkpoint_dirs:
             model_base.config.decoder_start_token_id = model_base.config.pad_token_id
     elif args.model_type == 't5-decoder':
         model_base = T5DecoderForCausalLM.from_pretrained(checkpoint_dir, torch_dtype=torch.float16)
+        model_base.config.is_decoder_only = True
+        model_base.config.is_encoder_decoder = False
     else:
         raise NotImplementedError(f'model_type {args.model_type} is not implemented')
 
@@ -216,9 +218,9 @@ for checkpoint_dir in args.checkpoint_dirs:
 
                 # generate sequences
                 for generate_name, generate_config in generate_configs.items():
-                    if model.config.is_encoder_decoder:
+                    if args.model_type == 't5':
                         generate_outputs = model.generate(inputs=input_ids, **generate_config)
-                    elif model.config.is_decoder_only:
+                    elif args.model_type == 't5-decoder':
                         decoder_input_ids = generate_config.get('decoder_input_ids')
                         generate_outputs = model.generate(inputs=decoder_input_ids, **generate_config)
                     else:
